@@ -2,16 +2,26 @@
 # https://medium.com/@bofenghuang7/what-i-learned-from-whisper-fine-tuning-event-2a68dab1862
 # https://github.com/huggingface/community-events
 # https://huggingface.co/blog/fine-tune-whisper
+
 from khmernltk import word_tokenize
-from transformers import WhisperForConditionalGeneration, WhisperProcessor, Seq2SeqTrainingArguments,Seq2SeqTrainer
+from transformers import WhisperForConditionalGeneration, WhisperProcessor, Seq2SeqTrainingArguments, Seq2SeqTrainer
 from datasets import Audio, DatasetDict, concatenate_datasets, load_dataset
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 import torch
 import evaluate
+from dotenv import load_dotenv
+import os
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Retrieve Hugging Face token from environment variable
+HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+
+# Configuration
 OUTPUT_DIR = "./outputs/whisper-tiny-khmer"
-MODEL_NAME = "Whisper Tiny Khmer - Seanghay Yath"
+MODEL_NAME = "Whisper Fine-tuned for Khmer Speech - VIRA RITHY"
 MODEL_ID = "openai/whisper-tiny"
 MODEL_LANGUAGE = "khmer"
 
@@ -43,30 +53,30 @@ def normalize_dataset(ds, audio_column_name=None, text_column_name=None):
         ds = ds.rename_column(text_column_name, TEXT_COLUMN_NAME)
     # resample to the same sampling rate
     ds = ds.cast_column("audio", Audio(sampling_rate=16_000))
-    # normalise columns to ["audio", "sentence"]
+    # normalize columns to ["audio", "sentence"]
     ds = ds.remove_columns(set(ds.features.keys()) - set([AUDIO_COLUMN_NAME, TEXT_COLUMN_NAME]))
     return ds
 
-google_fleurs_train_ds = load_dataset("google/fleurs", "km_kh", split="train+validation", use_auth_token=True)
+# Load datasets without 'use_auth_token' for public datasets
+google_fleurs_train_ds = load_dataset("google/fleurs", "km_kh", split="train+validation", trust_remote_code=True)
 google_fleurs_train_ds = google_fleurs_train_ds.map(transform_khmer_sentence)
 
-google_fleurs_test_ds = load_dataset("google/fleurs", "km_kh", split="test", use_auth_token=True)
+google_fleurs_test_ds = load_dataset("google/fleurs", "km_kh", split="test", trust_remote_code=True)
 google_fleurs_test_ds = google_fleurs_test_ds.map(transform_khmer_sentence)
 
-openslr_train_ds = load_dataset("openslr", "SLR42", split="train", use_auth_token=True)
+# Remove 'use_auth_token' for openslr since it's a public dataset
+openslr_train_ds = load_dataset("openslr", "SLR42", split="train", trust_remote_code=True)
 
-kmcs_train_ds = load_dataset("seanghay/kmcs", split="train", use_auth_token=True)
+# Keep 'use_auth_token=True' for private datasets like 'seanghay/km-speech-corpus'
+kmcs_train_ds = load_dataset("seanghay/km-speech-corpus", split="train", trust_remote_code=True)
+
 kmcs_train_ds = kmcs_train_ds.map(transform_khmer_sentence)
-
-aug_train_ds = load_dataset("seanghay/km-augmented-16-combined", split="train", use_auth_token=True)
 
 raw_datasets = DatasetDict()
 raw_datasets['train'] = concatenate_datasets([
   normalize_dataset(google_fleurs_train_ds, audio_column_name="audio", text_column_name="transcription"),
   normalize_dataset(openslr_train_ds, audio_column_name="audio", text_column_name="sentence"),
-  normalize_dataset(kmcs_train_ds, audio_column_name="audio", text_column_name="transcription"),
-  
-  aug_train_ds # augmented dataset
+  normalize_dataset(kmcs_train_ds, audio_column_name="audio", text_column_name="transcription")
 ])
 
 raw_datasets['train'] = raw_datasets['train'].shuffle(seed=10)
@@ -96,10 +106,8 @@ vectorized_datasets = raw_datasets.map(
     desc="preprocess dataset",
 )
 
-
 def is_audio_in_length_range(length):
     return length > min_input_length and length < max_input_length
-
 
 vectorized_datasets = vectorized_datasets.filter(
     is_audio_in_length_range, num_proc=preprocessing_num_workers, input_columns=["input_length"]
@@ -130,7 +138,7 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
 
         # if bos token is appended in previous tokenization step,
-        # cut bos token here as it's append later anyways
+        # cut bos token here as it's appended later anyways
         if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
             labels = labels[:, 1:]
 
